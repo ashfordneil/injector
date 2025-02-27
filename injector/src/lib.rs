@@ -6,6 +6,8 @@ use std::{
 use lazy_static::lazy_static;
 pub use linkme::distributed_slice;
 
+pub use injector_derive::Injectable;
+
 pub trait Injectable<'a>
 where
     Self: 'a,
@@ -15,10 +17,11 @@ where
     unsafe fn upcast(self) -> Self::Static;
 }
 
+#[doc(hidden)]
 pub trait InjectableStatic: Any {
     type Injectable<'a>: Injectable<'a, Static = Self>;
 
-    fn downcast<'a>(&'a self) -> &'a Self::Injectable<'a>;
+    fn downcast(&self) -> &Self::Injectable<'_>;
 }
 
 #[doc(hidden)]

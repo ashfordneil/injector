@@ -4,5 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+injector-derive = { path = "../injector-derive" }
+
 linkme = "0.3"
 lazy_static = "1.5.0"
