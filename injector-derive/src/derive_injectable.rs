@@ -105,7 +105,7 @@ impl InjectableDeriveInputs {
         let borrowed_type = self.borrowed_self_type();
 
         quote::quote! {
-            impl ::injector::InjectableStatic for #static_type {
+            impl ::injector::derive_api::InjectableStatic for #static_type {
                 type Injectable<'a> = #borrowed_type;
 
                 fn downcast(&self) -> &Self::Injectable<'_> {
@@ -120,13 +120,13 @@ impl InjectableDeriveInputs {
         let deps = self.get_deps()?;
 
         Ok(quote::quote! {
-            #[::injector::distributed_slice(::injector::INJECTIONS)]
-            fn create_meta() -> ::injector::InjectMeta {
-                ::injector::InjectMeta {
+            #[::injector::derive_api::distributed_slice(::injector::derive_api::INJECTION_REGISTRY)]
+            fn create_meta() -> ::injector::derive_api::InjectMeta {
+                ::injector::derive_api::InjectMeta {
                     this: ::std::any::TypeId::of::<#static_type>(),
+                    name: ::std::any::type_name::<#static_type>(),
                     dependencies: #deps,
                     create: create,
-                    name: ::std::any::type_name::<#static_type>(),
                 }
             }
         })

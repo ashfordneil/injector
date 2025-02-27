@@ -1,117 +1,33 @@
-use std::{
-    any::{Any, TypeId},
-    collections::{HashMap, HashSet, VecDeque},
-};
-
-use lazy_static::lazy_static;
-pub use linkme::distributed_slice;
+#[doc(hidden)]
+pub mod derive_api;
+mod runtime;
 
 pub use injector_derive::Injectable;
+pub use runtime::Injector;
 
+/// A type that the [`Injector`] can manage. This type should have a set of dependencies (which are
+/// also [`Injectable`]), and a way to construct the type from those dependencies. Use the
+/// accompanying derive macro rather than implementing this by hand, as there is a lot behind the
+/// scenes.
 pub trait Injectable<'a>
 where
     Self: 'a,
 {
-    type Static: InjectableStatic<Injectable<'a> = Self>;
+    /// An equivalent version of `Self` which is not parameterised by any lifetimes (i.e. its
+    /// `'static`).
+    #[doc(hidden)]
+    type Static: derive_api::InjectableStatic<Injectable<'a> = Self>;
 
+    /// Convert an instance of this type, which is parameterised by a lifetime to ensure that it
+    /// does not outlive its dependencies, into an instance of `Self::Static`, which does not have
+    /// any lifetime information stored at the type level.
+    ///
+    /// # Safety
+    /// This function takes `&'a Dependencies` in self and turns them into `&'static Dependencies`,
+    /// and that is what makes it unsafe. To use it safely, ensure that you treat the returned
+    /// object as if it was still bound by (and cannot outlive) `&'a`. There is a matching
+    /// [`derive_api::InjectableStatic::downcast`] function that can return this object back to its
+    /// original type to help with this.
+    #[doc(hidden)]
     unsafe fn upcast(self) -> Self::Static;
-}
-
-#[doc(hidden)]
-pub trait InjectableStatic: Any {
-    type Injectable<'a>: Injectable<'a, Static = Self>;
-
-    fn downcast(&self) -> &Self::Injectable<'_>;
-}
-
-#[doc(hidden)]
-pub struct InjectMeta {
-    pub this: TypeId,
-    pub dependencies: Vec<TypeId>,
-    pub create: fn(&Injector) -> Box<dyn Any>,
-    pub name: &'static str,
-}
-
-#[doc(hidden)]
-#[distributed_slice]
-pub static INJECTIONS: [fn() -> InjectMeta];
-
-lazy_static! {
-    static ref INJECTIONS_INDEX: HashMap<TypeId, InjectMeta> = INJECTIONS
-        .iter()
-        .map(|f| (*f)())
-        .map(|v| (v.this, v))
-        .collect();
-}
-
-pub struct Injector {
-    items: Vec<Box<dyn Any>>,
-    mapping: HashMap<TypeId, usize>,
-}
-
-impl Injector {
-    pub fn new() -> Self {
-        Injector {
-            items: Vec::new(),
-            mapping: HashMap::new(),
-        }
-    }
-
-    /// Assuming the object has already been created
-    pub fn get<'a, I: Injectable<'a>>(&'a self) -> &'a I {
-        let type_id = TypeId::of::<I::Static>();
-        let list_id = self.mapping.get(&type_id).unwrap();
-        let static_item: &I::Static = self.items[*list_id].downcast_ref().unwrap();
-        static_item.downcast()
-    }
-
-    /// Creates the object, then you can get it with [`Self::get`]
-    pub fn prebuild<I: InjectableStatic>(&mut self) {
-        let mut create_order = Vec::new();
-        let mut visit_queue = VecDeque::new();
-        let mut done = HashSet::new();
-        let mut in_progress = HashSet::new();
-
-        enum VisitType {
-            BeforeChildren,
-            AfterChildren,
-        }
-
-        let start = TypeId::of::<I>();
-        visit_queue.push_back((start, VisitType::BeforeChildren));
-        visit_queue.push_back((start, VisitType::AfterChildren));
-        while let Some((to_visit, visit_type)) = visit_queue.pop_front() {
-            if done.contains(&to_visit) {
-                continue;
-            }
-            match visit_type {
-                VisitType::BeforeChildren => {
-                    let meta = INJECTIONS_INDEX.get(&to_visit).unwrap();
-                    assert!(
-                        in_progress.insert(to_visit),
-                        "Loop detected for type {:?}",
-                        meta.name
-                    );
-                    for dep in meta.dependencies.iter() {
-                        if !done.contains(dep) {
-                            visit_queue.push_front((*dep, VisitType::AfterChildren));
-                            visit_queue.push_front((*dep, VisitType::BeforeChildren));
-                        }
-                    }
-                }
-                VisitType::AfterChildren => {
-                    create_order.push(to_visit);
-                    in_progress.remove(&to_visit);
-                    done.insert(to_visit);
-                }
-            }
-        }
-
-        for item in create_order {
-            let meta = INJECTIONS_INDEX.get(&item).unwrap();
-            let output = (meta.create)(&self);
-            self.items.push(output);
-            self.mapping.insert(item, self.items.len() - 1);
-        }
-    }
 }
