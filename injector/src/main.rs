@@ -1,8 +1,7 @@
 use injector::{Injectable, Injector};
 
 fn main() {
-    let mut injector = Injector::new();
-    injector.prebuild::<Everything<'static>>();
+    let injector = Injector::new();
     let empty: &Empty = injector.get();
     let everything: &Everything = injector.get();
     assert_eq!(&raw const *empty, &raw const *everything.holds.empty);
