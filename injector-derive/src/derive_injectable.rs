@@ -56,23 +56,20 @@ impl InjectableDeriveInputs {
     }
 
     pub fn derive(self) -> syn::Result<proc_macro2::TokenStream> {
-        let mod_name = self.mod_name();
         let base_impl = self.get_base_impl();
         let static_impl = self.get_static_impl();
         let create_fn = self.get_create_fn();
         let create_meta = self.get_create_meta()?;
 
         Ok(quote::quote! {
-            mod #mod_name {
-                #base_impl
-                #static_impl
-                #create_fn
-                #create_meta
-            }
+            #base_impl
+            #static_impl
+            #create_fn
+            #create_meta
         })
     }
 
-    fn mod_name(&self) -> Ident {
+    fn generate_name(&self, tag: &str) -> Ident {
         let snake_cased = self
             .name
             .to_string()
@@ -80,7 +77,7 @@ impl InjectableDeriveInputs {
             .to_case(Case::Snake);
 
         Ident::new(
-            &format!("__injector_injectable_impl_for_{snake_cased}"),
+            &format!("__injector_{tag}_{snake_cased}"),
             self.name.span(),
         )
     }
@@ -118,15 +115,17 @@ impl InjectableDeriveInputs {
     fn get_create_meta(&self) -> syn::Result<proc_macro2::TokenStream> {
         let static_type = self.static_self_type();
         let deps = self.get_deps()?;
+        let create_fn_name = self.generate_name("create_fn");
+        let create_meta_name = self.generate_name("create_meta");
 
         Ok(quote::quote! {
             #[::injector::derive_api::distributed_slice(::injector::derive_api::INJECTION_REGISTRY)]
-            fn create_meta() -> ::injector::derive_api::InjectMeta {
+            fn #create_meta_name() -> ::injector::derive_api::InjectMeta {
                 ::injector::derive_api::InjectMeta {
                     this: ::std::any::TypeId::of::<#static_type>(),
                     name: ::std::any::type_name::<#static_type>(),
                     dependencies: #deps,
-                    create: create,
+                    create: #create_fn_name,
                 }
             }
         })
@@ -136,7 +135,7 @@ impl InjectableDeriveInputs {
         let name = &self.name;
         let constructed = match &self.constructor_info {
             InjectableDeriveConstructorInfo::CustomConstructor { name } => {
-                quote::quote! { (super::#name)(injector) }
+                quote::quote! { #name(injector) }
             }
             InjectableDeriveConstructorInfo::PerField { fields } => match fields {
                 Fields::Named(fields) => {
@@ -144,24 +143,25 @@ impl InjectableDeriveInputs {
                         let name = field.ident.as_ref().unwrap();
                         quote::quote! { #name: injector.get() }
                     });
-                    quote::quote! { super::#name { #(#fields),* } }
+                    quote::quote! { #name { #(#fields),* } }
                 }
                 Fields::Unnamed(fields) => {
                     let fields = fields
                         .unnamed
                         .iter()
                         .map(|_| quote::quote! { injector.get() });
-                    quote::quote! { super::#name(#(#fields),*) }
+                    quote::quote! { #name(#(#fields),*) }
                 }
-                Fields::Unit => quote::quote! { super::#name },
+                Fields::Unit => quote::quote! { #name },
             },
         };
 
+        let create_fn_name = self.generate_name("create_fn");
         quote::quote! {
-            fn create(injector: &::injector::Injector) -> ::std::boxed::Box<dyn ::std::any::Any> {
+            fn #create_fn_name(injector: &::injector::Injector) -> ::std::boxed::Box<dyn ::std::any::Any> {
                 let constructed = #constructed;
                 Box::new(unsafe {
-                    <super::#name as ::injector::Injectable>::upcast(constructed)
+                    <#name as ::injector::Injectable>::upcast(constructed)
                 })
             }
         }
@@ -184,7 +184,7 @@ impl InjectableDeriveInputs {
                     } else {
                         Cow::Borrowed(type_path)
                     };
-                    Ok(quote::quote!(::std::any::TypeId::of::<super::#ty>()))
+                    Ok(quote::quote!(::std::any::TypeId::of::<#ty>()))
                 }
                 other => Err(syn::Error::new_spanned(other, "Only plain types can be injected at this time"))
             }).collect::<syn::Result<Vec<_>>>()?;
@@ -197,18 +197,18 @@ impl InjectableDeriveInputs {
     fn static_self_type(&self) -> proc_macro2::TokenStream {
         let name = &self.name;
         if self.lifetime.is_some() {
-            quote::quote!(super::#name <'static>)
+            quote::quote!(#name <'static>)
         } else {
-            quote::quote!(super::#name)
+            quote::quote!(#name)
         }
     }
 
     fn borrowed_self_type(&self) -> proc_macro2::TokenStream {
         let name = &self.name;
         if self.lifetime.is_some() {
-            quote::quote!(super::#name<'a>)
+            quote::quote!(#name<'a>)
         } else {
-            quote::quote!(super::#name)
+            quote::quote!(#name)
         }
     }
 }
