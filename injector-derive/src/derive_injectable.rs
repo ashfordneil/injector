@@ -1,40 +1,36 @@
-use std::borrow::Cow;
+use proc_macro2::{Ident, TokenStream};
+use quote::quote;
+use syn::{Attribute, Data, DeriveInput, Fields, GenericParam, Generics, Meta};
 
-use convert_case::{Case, Casing};
-use proc_macro2::Ident;
-use syn::{
-    Attribute, Data, DeriveInput, ExprPath, Fields, GenericArgument, GenericParam, Generics,
-    Lifetime, PathArguments, Type, TypePath,
-};
+use crate::utils::{self, DependentType, Namespace};
 
 pub struct InjectableDeriveInputs {
-    name: Ident,
-    lifetime: Option<Lifetime>,
-    constructor_info: InjectableDeriveConstructorInfo,
-}
-
-enum InjectableDeriveConstructorInfo {
-    CustomConstructor { name: ExprPath },
-    PerField { fields: Fields },
+    type_name: Ident,
+    ns: Namespace,
+    has_lifetime: bool,
+    // If this is left as None, that means they have their own constructor elsewhere
+    fields: Option<Fields>,
 }
 
 impl InjectableDeriveInputs {
     pub fn from_input(input: proc_macro::TokenStream) -> syn::Result<Self> {
         let raw_input: DeriveInput = syn::parse(input)?;
 
-        let name = raw_input.ident.clone();
-        let lifetime = Self::get_lifetime(&raw_input.generics)?;
-        let constructor_info = InjectableDeriveConstructorInfo::from_input(raw_input)?;
+        let type_name = raw_input.ident.clone();
+        let ns = Namespace::from_type_name(&type_name);
+        let has_lifetime = Self::has_lifetime(&raw_input.generics)?;
+        let fields = Self::get_fields(raw_input)?;
 
         Ok(InjectableDeriveInputs {
-            name,
-            lifetime,
-            constructor_info,
+            type_name,
+            ns,
+            has_lifetime,
+            fields,
         })
     }
 
-    fn get_lifetime(input: &Generics) -> syn::Result<Option<Lifetime>> {
-        let mut output = None;
+    fn has_lifetime(input: &Generics) -> syn::Result<bool> {
+        let mut has_lifetime = false;
         for param in input.params.iter() {
             let GenericParam::Lifetime(lifetime) = param else {
                 return Err(syn::Error::new_spanned(
@@ -43,65 +39,98 @@ impl InjectableDeriveInputs {
                 ));
             };
 
-            if output.is_some() {
+            if has_lifetime {
                 return Err(syn::Error::new_spanned(
                     lifetime,
                     "Injectable types are only allowed to have one lifetime",
                 ));
             }
-            output = Some(lifetime.lifetime.clone());
+            has_lifetime = true;
         }
 
-        Ok(output)
+        Ok(has_lifetime)
     }
 
-    pub fn derive(self) -> syn::Result<proc_macro2::TokenStream> {
+    fn get_fields(input: DeriveInput) -> syn::Result<Option<Fields>> {
+        if Self::has_constructor_annotation(input.attrs.iter())? {
+            return Ok(None);
+        }
+
+        let Data::Struct(data) = input.data else {
+            return Err(syn::Error::new_spanned(
+                input,
+                "Injectable can only be derived for structs or types with a #[has_constructor] attribute.",
+            ));
+        };
+
+        Ok(Some(data.fields))
+    }
+
+    fn has_constructor_annotation<'a>(
+        attrs: impl Iterator<Item = &'a Attribute>,
+    ) -> syn::Result<bool> {
+        let attrs = attrs
+            .filter(|attr| attr.path().is_ident("has_constructor"))
+            .map(|attr| match &attr.meta {
+                Meta::Path(inner) => Ok(inner),
+                Meta::List(list) => Err(syn::Error::new_spanned(
+                    &list.tokens,
+                    "#[has_constructor] takes no arguments",
+                )),
+                Meta::NameValue(name_value) => Err(syn::Error::new_spanned(
+                    &name_value.value,
+                    "#[has_constructor] needs no value",
+                )),
+            })
+            .collect::<syn::Result<Vec<_>>>()?;
+
+        match attrs.as_slice() {
+            [] => Ok(false),
+            [_single] => Ok(true),
+            [_, second, ..] => Err(syn::Error::new_spanned(
+                second,
+                "Only one #[has_constructor] attribute is allowed",
+            )),
+        }
+    }
+
+    pub fn derive(self) -> syn::Result<proc_macro::TokenStream> {
         let base_impl = self.get_base_impl();
         let static_impl = self.get_static_impl();
         let create_fn = self.get_create_fn();
         let create_meta = self.get_create_meta()?;
 
-        Ok(quote::quote! {
+        Ok(quote! {
             #base_impl
             #static_impl
             #create_fn
             #create_meta
-        })
+        }
+        .into())
     }
 
-    fn generate_name(&self, tag: &str) -> Ident {
-        let snake_cased = self
-            .name
-            .to_string()
-            .from_case(Case::Pascal)
-            .to_case(Case::Snake);
-
-        Ident::new(
-            &format!("__injector_{tag}_{snake_cased}"),
-            self.name.span(),
-        )
-    }
-
-    fn get_base_impl(&self) -> proc_macro2::TokenStream {
+    fn get_base_impl(&self) -> TokenStream {
         let static_type = self.static_self_type();
         let borrowed_type = self.borrowed_self_type();
 
-        quote::quote! {
+        quote! {
             impl <'a> ::injector::Injectable<'a> for #borrowed_type {
                 type Static = #static_type;
 
                 unsafe fn upcast(self) -> Self::Static {
-                    ::std::mem::transmute::<Self, Self::Static>(self)
+                    // SAFETY: see docs for upcast in the trait declaration. This is exactly what we
+                    // are meant to do here.
+                    unsafe { ::std::mem::transmute::<Self, Self::Static>(self) }
                 }
             }
         }
     }
 
-    fn get_static_impl(&self) -> proc_macro2::TokenStream {
+    fn get_static_impl(&self) -> TokenStream {
         let static_type = self.static_self_type();
         let borrowed_type = self.borrowed_self_type();
 
-        quote::quote! {
+        quote! {
             impl ::injector::derive_api::InjectableStatic for #static_type {
                 type Injectable<'a> = #borrowed_type;
 
@@ -112,162 +141,63 @@ impl InjectableDeriveInputs {
         }
     }
 
-    fn get_create_meta(&self) -> syn::Result<proc_macro2::TokenStream> {
-        let static_type = self.static_self_type();
-        let deps = self.get_deps()?;
-        let create_fn_name = self.generate_name("create_fn");
-        let create_meta_name = self.generate_name("create_meta");
-
-        Ok(quote::quote! {
-            #[::injector::derive_api::distributed_slice(::injector::derive_api::INJECTION_REGISTRY)]
-            fn #create_meta_name() -> ::injector::derive_api::InjectMeta {
-                ::injector::derive_api::InjectMeta {
-                    this: ::std::any::TypeId::of::<#static_type>(),
-                    name: ::std::any::type_name::<#static_type>(),
-                    dependencies: #deps,
-                    create: #create_fn_name,
-                }
-            }
-        })
-    }
-
-    fn get_create_fn(&self) -> proc_macro2::TokenStream {
-        let name = &self.name;
-        let constructed = match &self.constructor_info {
-            InjectableDeriveConstructorInfo::CustomConstructor { name } => {
-                quote::quote! { #name(injector) }
-            }
-            InjectableDeriveConstructorInfo::PerField { fields } => match fields {
-                Fields::Named(fields) => {
-                    let fields = fields.named.iter().map(|field| {
-                        let name = field.ident.as_ref().unwrap();
-                        quote::quote! { #name: injector.get() }
-                    });
-                    quote::quote! { #name { #(#fields),* } }
-                }
-                Fields::Unnamed(fields) => {
-                    let fields = fields
-                        .unnamed
-                        .iter()
-                        .map(|_| quote::quote! { injector.get() });
-                    quote::quote! { #name(#(#fields),*) }
-                }
-                Fields::Unit => quote::quote! { #name },
-            },
+    fn get_create_meta(&self) -> syn::Result<TokenStream> {
+        let Some(fields) = &self.fields else {
+            // If there's no fields, they will need to get their create_meta from the constructor
+            return Ok(quote! {});
         };
 
-        let create_fn_name = self.generate_name("create_fn");
-        quote::quote! {
+        let deps = fields.iter().map(DependentType::from_field);
+        utils::quote_inject_meta(&self.type_name, &self.ns, deps)
+    }
+
+    fn get_create_fn(&self) -> TokenStream {
+        let Some(fields) = &self.fields else {
+            return quote!();
+        };
+
+        let type_name = &self.type_name;
+        let constructed = match fields {
+            Fields::Named(fields) => {
+                let fields = fields.named.iter().map(|field| {
+                    let field_name = field.ident.as_ref().unwrap();
+                    quote! { #field_name: injector.get() }
+                });
+                quote! { #type_name { #(#fields),* } }
+            }
+            Fields::Unnamed(fields) => {
+                let fields = fields.unnamed.iter().map(|_| quote! { injector.get() });
+                quote! { #type_name(#(#fields),*) }
+            }
+            Fields::Unit => quote! { #type_name },
+        };
+
+        let create_fn_name = self.ns.name_of_create_fn();
+        quote! {
             fn #create_fn_name(injector: &::injector::Injector) -> ::std::boxed::Box<dyn ::std::any::Any> {
                 let constructed = #constructed;
-                Box::new(unsafe {
-                    <#name as ::injector::Injectable>::upcast(constructed)
+                ::std::boxed::Box::new(unsafe {
+                    <#type_name as ::injector::Injectable>::upcast(constructed)
                 })
             }
         }
     }
 
-    fn get_deps(&self) -> syn::Result<proc_macro2::TokenStream> {
-        let InjectableDeriveConstructorInfo::PerField { fields } = &self.constructor_info else {
-            return Ok(quote::quote! { ::std::vec![] });
-        };
-
-        let deps = fields.iter().map(|field| &field.ty)
-            .map(|ty| match ty {
-                Type::Reference(reference) => Ok(&reference.elem),
-                _ => Err(syn::Error::new_spanned(ty, "Unable to inject this type automatically. Right now only references are supported")),
-            })
-            .map(|ref_ty| match &**ref_ty? {
-                Type::Path(type_path) => {
-                    let ty = if let Some(known_lifetime) = &self.lifetime {
-                        Cow::Owned(make_type_static(type_path, known_lifetime))
-                    } else {
-                        Cow::Borrowed(type_path)
-                    };
-                    Ok(quote::quote!(::std::any::TypeId::of::<#ty>()))
-                }
-                other => Err(syn::Error::new_spanned(other, "Only plain types can be injected at this time"))
-            }).collect::<syn::Result<Vec<_>>>()?;
-
-        Ok(quote::quote! {
-            ::std::vec![ #(#deps),* ]
-        })
-    }
-
-    fn static_self_type(&self) -> proc_macro2::TokenStream {
-        let name = &self.name;
-        if self.lifetime.is_some() {
-            quote::quote!(#name <'static>)
+    fn static_self_type(&self) -> TokenStream {
+        let name = &self.type_name;
+        if self.has_lifetime {
+            quote!(#name <'static>)
         } else {
-            quote::quote!(#name)
+            quote!(#name)
         }
     }
 
-    fn borrowed_self_type(&self) -> proc_macro2::TokenStream {
-        let name = &self.name;
-        if self.lifetime.is_some() {
-            quote::quote!(#name<'a>)
+    fn borrowed_self_type(&self) -> TokenStream {
+        let name = &self.type_name;
+        if self.has_lifetime {
+            quote!(#name<'a>)
         } else {
-            quote::quote!(#name)
+            quote!(#name)
         }
     }
-}
-
-impl InjectableDeriveConstructorInfo {
-    fn from_input(input: DeriveInput) -> syn::Result<Self> {
-        if let Some(constructor) = Self::get_constructor_expression(input.attrs.iter())? {
-            return Ok(InjectableDeriveConstructorInfo::CustomConstructor { name: constructor });
-        }
-
-        let Data::Struct(data) = input.data else {
-            return Err(syn::Error::new_spanned(
-                input,
-                "Injectable can only be derived for structs or types with a #[constructor] attribute.",
-            ));
-        };
-
-        Ok(InjectableDeriveConstructorInfo::PerField {
-            fields: data.fields,
-        })
-    }
-
-    fn get_constructor_expression<'a>(
-        attrs: impl Iterator<Item = &'a Attribute>,
-    ) -> syn::Result<Option<ExprPath>> {
-        let attrs = attrs
-            .filter(|attr| attr.path().is_ident("constructor"))
-            .map(|attr| attr.parse_args::<ExprPath>())
-            .collect::<syn::Result<Vec<_>>>()?;
-
-        match attrs.as_slice() {
-            [] => Ok(None),
-            [single] => Ok(Some(single.clone())),
-            [_, second, ..] => Err(syn::Error::new_spanned(
-                second,
-                "Only one #[constructor] attribute is allowed",
-            )),
-        }
-    }
-
-
-
-}
-
-fn make_type_static(ty: &TypePath, lifetime: &Lifetime) -> TypePath {
-    let mut output = ty.clone();
-    for segment in output.path.segments.iter_mut() {
-        let PathArguments::AngleBracketed(generics) = &mut segment.arguments else {
-            continue;
-        };
-
-        for mut arg in generics.args.iter_mut() {
-            if let GenericArgument::Lifetime(lt) = &mut arg {
-                if lt == lifetime {
-                    *lt = Lifetime::new("'static", lt.span());
-                }
-            }
-        }
-    }
-
-    output
 }
