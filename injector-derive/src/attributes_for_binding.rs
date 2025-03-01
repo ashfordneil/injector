@@ -40,14 +40,14 @@ impl BindingAttributeInputs {
             return Err(syn::Error::new_spanned(item, error));
         };
         let concrete_impl = DependentType::from_raw_type(&item.self_ty)?;
-        let ns = Namespace::from_trait_impl(&trait_, &concrete_impl.inner);
+        let ns = Namespace::from_trait_impl(&trait_, &concrete_impl);
 
         Ok(BindingAttributeInputs {
             body_verbatim: body_inputs.into(),
             is_multi_binding,
             ns,
             trait_,
-            concrete_impl
+            concrete_impl,
         })
     }
 
@@ -60,21 +60,33 @@ impl BindingAttributeInputs {
             #create_fn
             #binding_meta
             #original
-        }.into()
+        }
+        .into()
     }
 
     fn get_create_fn(&self) -> TokenStream {
-        let concrete_type = self.concrete_impl.as_stripped_type();
         let create_fn_name = self.ns.name_of_create_fn();
         let trait_ = &self.trait_;
 
+        let static_concrete_type = match &self.concrete_impl {
+            DependentType::RegularType(concrete_type) => quote! {
+                unsafe {
+                    // SAFETY: See safety docs in BindingMeta::create
+                    ::std::mem::transmute::<&#concrete_type, &'static <#concrete_type as ::injector::Injectable>::Static>(concrete_type)
+                }
+            },
+            DependentType::TraitObject(concrete_trait) => quote! {
+                unsafe {
+                    // SAFETY: See safety docs in BindingMeta::create
+                    ::std::mem::transmute::<&dyn #concrete_trait, &'static dyn #concrete_trait>(concrete_trait)
+                }
+            },
+            DependentType::CollectionOfTraitObjects(_) => unreachable!(),
+        };
         quote! {
             unsafe fn #create_fn_name(injector: &::injector::Injector) -> ::std::boxed::Box<dyn ::std::any::Any> {
                 let concrete_type = injector.get();
-                let static_concrete_type = unsafe {
-                    // SAFETY: See safety docs in BindingMeta::create
-                    ::std::mem::transmute::<&#concrete_type, &'static <#concrete_type as ::injector::Injectable>::Static>(concrete_type)
-                };
+                let static_concrete_type = #static_concrete_type;
                 let trait_object: &dyn #trait_ = &*static_concrete_type;
 
                 ::std::boxed::Box::new(trait_object)

@@ -2,12 +2,11 @@ use injector::{Injectable, Injector, binding, multi_binding};
 
 fn main() {
     let injector = Injector::new();
-    let trait_object = injector.get_trait_object::<dyn SayHello>();
-    println!("{}", trait_object.say_hello());
+    let everything: &Everything = injector.get();
+    println!("{}", everything.say_hello.say_hello());
 
-    let set_of_trait_objects = injector.get_all_trait_objects::<dyn WeAllSayHello>();
     let mut output = String::new();
-    for trait_object in set_of_trait_objects {
+    for trait_object in &everything.we_all_say_hello {
         trait_object.also_say_hello(&mut output);
     }
     println!("{}", output);
@@ -52,4 +51,11 @@ impl WeAllSayHello for SecondSayHelloImpl {
         }
         say_hello_into.push_str("We all say hello, from the second concrete impl");
     }
+}
+
+#[derive(Injectable)]
+struct Everything<'a> {
+    say_hello: &'a dyn SayHello,
+    #[from_multi_binding(dyn WeAllSayHello)]
+    we_all_say_hello: Vec<&'a dyn WeAllSayHello>,
 }

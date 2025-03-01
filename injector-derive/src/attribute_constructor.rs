@@ -55,7 +55,7 @@ impl ConstructorAttributeInputs {
         }
     }
     pub fn generate_code(self) -> syn::Result<proc_macro::TokenStream> {
-        let create_fn = self.get_create_fn();
+        let create_fn = self.get_create_fn()?;
         let create_meta = self.get_create_meta()?;
         let original = self.body_verbatim;
 
@@ -67,24 +67,30 @@ impl ConstructorAttributeInputs {
         .into())
     }
 
-    fn get_create_fn(&self) -> TokenStream {
+    fn get_create_fn(&self) -> syn::Result<TokenStream> {
         let constructor_name = &self.constructor_name;
-        let output_type = strip_lifetimes(&self.output_type);
+        let mut output_type = self.output_type.clone();
+        strip_lifetimes(&mut output_type.path);
         let create_fn_name = self.ns.name_of_create_fn();
-        let params = self.inputs.iter().map(|_| quote! { injector.get() });
+        let params = self
+            .inputs
+            .iter()
+            .map(|input| DependentType::from_fn_arg(input).map(|dep| dep.quote_get_call()))
+            .collect::<Result<Vec<_>, _>>()?;
 
-        quote! {
+        Ok(quote! {
             unsafe fn #create_fn_name(injector: &::injector::Injector) -> ::std::boxed::Box<dyn ::std::any::Any> {
                 let constructed = #constructor_name(#(#params),*);
                 ::std::boxed::Box::new(unsafe {
                     <#output_type as ::injector::Injectable>::upcast(constructed)
                 })
             }
-        }
+        })
     }
 
     fn get_create_meta(&self) -> syn::Result<TokenStream> {
-        let static_type = strip_lifetimes(&self.output_type);
+        let mut static_type = self.output_type.clone();
+        strip_lifetimes(&mut static_type.path);
         let deps = self.inputs.iter().map(DependentType::from_fn_arg);
 
         utils::quote_inject_meta(static_type, &self.ns, deps)

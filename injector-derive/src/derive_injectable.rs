@@ -97,7 +97,7 @@ impl InjectableDeriveInputs {
     pub fn derive(self) -> syn::Result<proc_macro::TokenStream> {
         let base_impl = self.get_base_impl();
         let static_impl = self.get_static_impl();
-        let create_fn = self.get_create_fn();
+        let create_fn = self.get_create_fn()?;
         let create_meta = self.get_create_meta()?;
 
         Ok(quote! {
@@ -151,36 +151,45 @@ impl InjectableDeriveInputs {
         utils::quote_inject_meta(&self.type_name, &self.ns, deps)
     }
 
-    fn get_create_fn(&self) -> TokenStream {
+    fn get_create_fn(&self) -> syn::Result<TokenStream> {
         let Some(fields) = &self.fields else {
-            return quote!();
+            return Ok(quote!());
         };
 
         let type_name = &self.type_name;
         let constructed = match fields {
             Fields::Named(fields) => {
-                let fields = fields.named.iter().map(|field| {
-                    let field_name = field.ident.as_ref().unwrap();
-                    quote! { #field_name: injector.get() }
-                });
+                let fields = fields
+                    .named
+                    .iter()
+                    .map(|field| {
+                        let dependency = DependentType::from_field(&field)?.quote_get_call();
+                        let field_name = field.ident.as_ref().unwrap();
+                        Ok(quote! { #field_name: #dependency })
+                    })
+                    .collect::<syn::Result<Vec<_>>>()?;
                 quote! { #type_name { #(#fields),* } }
             }
             Fields::Unnamed(fields) => {
-                let fields = fields.unnamed.iter().map(|_| quote! { injector.get() });
+                let fields = fields
+                    .unnamed
+                    .iter()
+                    .map(|field| DependentType::from_field(&field).map(|dep| dep.quote_get_call()))
+                    .collect::<syn::Result<Vec<_>>>()?;
                 quote! { #type_name(#(#fields),*) }
             }
             Fields::Unit => quote! { #type_name },
         };
 
         let create_fn_name = self.ns.name_of_create_fn();
-        quote! {
+        Ok(quote! {
             fn #create_fn_name(injector: &::injector::Injector) -> ::std::boxed::Box<dyn ::std::any::Any> {
                 let constructed = #constructed;
                 ::std::boxed::Box::new(unsafe {
                     <#type_name as ::injector::Injectable>::upcast(constructed)
                 })
             }
-        }
+        })
     }
 
     fn static_self_type(&self) -> TokenStream {

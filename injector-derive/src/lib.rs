@@ -4,7 +4,7 @@ mod derive_injectable;
 
 mod utils;
 
-#[proc_macro_derive(Injectable, attributes(has_constructor))]
+#[proc_macro_derive(Injectable, attributes(has_constructor, from_multi_binding))]
 pub fn derive_injectable(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let input = match derive_injectable::InjectableDeriveInputs::from_input(input) {
         Ok(input) => input,
