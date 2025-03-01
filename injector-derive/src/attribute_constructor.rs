@@ -20,7 +20,7 @@ impl ConstructorAttributeInputs {
         if !attr_inputs.is_empty() {
             return Err(syn::Error::new_spanned(
                 TokenStream::from(attr_inputs),
-                "#[constructor] takes no attributes",
+                "#[constructor] takes no arguments",
             ));
         }
         let item = syn::parse::<ItemFn>(body_inputs.clone())?;
@@ -74,7 +74,7 @@ impl ConstructorAttributeInputs {
         let params = self.inputs.iter().map(|_| quote! { injector.get() });
 
         quote! {
-            fn #create_fn_name(injector: &::injector::Injector) -> ::std::boxed::Box<dyn ::std::any::Any> {
+            unsafe fn #create_fn_name(injector: &::injector::Injector) -> ::std::boxed::Box<dyn ::std::any::Any> {
                 let constructed = #constructor_name(#(#params),*);
                 ::std::boxed::Box::new(unsafe {
                     <#output_type as ::injector::Injectable>::upcast(constructed)

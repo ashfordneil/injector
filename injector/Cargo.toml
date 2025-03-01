@@ -7,3 +7,4 @@ edition = "2024"
 injector-derive = { path = "../injector-derive" }
 
 linkme = "0.3"
+multimap = {  version = "0.10.0", default-features = false }

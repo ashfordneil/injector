@@ -15,6 +15,7 @@ use crate::{
 pub struct Injector {
     items: UnsafeStore,
     index: HashMap<TypeId, usize>,
+    multi_bindings_index: HashMap<TypeId, Vec<usize>>,
 }
 
 impl Injector {
@@ -24,6 +25,7 @@ impl Injector {
         InjectorBuilder::new(Injector {
             items: UnsafeStore::new(),
             index: HashMap::new(),
+            multi_bindings_index: HashMap::new(),
         })
         .build_the_world()
     }
@@ -48,6 +50,50 @@ impl Injector {
         static_item.downcast()
     }
 
+    /// Fetch a trait object from the injector cache. This will panic if no binding has been made
+    /// to that trait with `#[binding]`.
+    pub fn get_trait_object<T: ?Sized + 'static>(&self) -> &T {
+        let Some(&position) = self.index.get(&TypeId::of::<&'static T>()) else {
+            panic!(
+                "Unable to get an instance of {} from the injector.",
+                std::any::type_name::<T>()
+            )
+        };
+
+        let boxed_trait_object: &&'static T = UnsafeStore::get(&self.items, position)
+            .unwrap() // any usize in the `index` has to map to an item in the UnsafeStore
+            .downcast_ref()
+            .unwrap(); // We check that the `dyn Any`s match up with what they say they do on insert
+
+        // SAFETY: This static item is super unsafe, because the type system does not know that it
+        // cannot outlive the injector. However, once we return it from this function, it gets given
+        // the lifetime of the injector (as that's what's in the function signature).
+        boxed_trait_object
+    }
+
+    /// Fetch all trait objects implementing a given trait from the injector cache. This will panic
+    /// if no bindings have been made to that trait with `#[multi_binding]`.
+    pub fn get_all_trait_objects<T: ?Sized + 'static>(&self) -> impl Iterator<Item = &T> {
+        let Some(positions) = self.multi_bindings_index.get(&TypeId::of::<&'static T>()) else {
+            panic!(
+                "Unable to get any instances of {} from the injector.",
+                std::any::type_name::<T>()
+            )
+        };
+
+        positions.iter().map(|&position| {
+            let boxed_trait_object: &&'static T = UnsafeStore::get(&self.items, position)
+                .unwrap() // any usize in the `index` has to map to an item in the UnsafeStore
+                .downcast_ref()
+                .unwrap(); // We check that the `dyn Any`s match up with what they say they do on insert
+
+            // SAFETY: This static item is super unsafe, because the type system does not know that it
+            // cannot outlive the injector. However, once we return it from this function, it gets given
+            // the lifetime of the injector (as that's what's in the function signature).
+            *boxed_trait_object
+        })
+    }
+
     pub(super) fn build_and_store(&mut self, metadata: &InjectMeta) {
         let static_item = unsafe {
             // SAFETY: The item returned by metadata.create is super unsafe, because the type system
@@ -69,6 +115,13 @@ impl Injector {
         );
 
         let position = UnsafeStore::push(&mut self.items, static_item);
-        self.index.insert(metadata.this, position);
+        if metadata.is_multi_binding {
+            self.multi_bindings_index
+                .entry(metadata.this)
+                .or_insert_with(Vec::new)
+                .push(position)
+        } else {
+            self.index.insert(metadata.this, position);
+        }
     }
 }
