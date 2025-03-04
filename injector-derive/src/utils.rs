@@ -236,7 +236,8 @@ pub fn quote_inject_meta(
     let inject_meta_fn_name = ns.name_of_inject_meta_fn();
 
     Ok(quote! {
-        #[::injector::derive_api::distributed_slice(::injector::derive_api::INJECTION_REGISTRY)]
+        #[::injector::derive_api::linkme::distributed_slice(::injector::derive_api::INJECTION_REGISTRY)]
+        #[linkme(crate = ::injector::derive_api::linkme)]
         fn #inject_meta_fn_name() -> ::injector::derive_api::InjectMeta {
             ::injector::derive_api::InjectMeta {
                 this: ::std::any::TypeId::of::<#type_name>(),

@@ -4,7 +4,7 @@
 
 use std::any::{Any, TypeId};
 
-pub use linkme::distributed_slice;
+pub use linkme;
 
 use crate::{Injectable, Injector};
 
@@ -89,10 +89,10 @@ pub struct BindingMeta {
 
 /// Runtime metadata for all the types that we want to inject, aggregated into one spot by the
 /// linker. For more info, see the [`linkme`] crate.
-#[distributed_slice]
+#[linkme::distributed_slice]
 pub static INJECTION_REGISTRY: [fn() -> InjectMeta];
 
 /// Runtime metadata for all the trait objects we want to be able to inject, aggregated into one
 /// spot by the linker. For more info, see the [`linkme`] crate.
-#[distributed_slice]
+#[linkme::distributed_slice]
 pub static BINDING_REGISTRY: [fn() -> BindingMeta];

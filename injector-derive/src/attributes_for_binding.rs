@@ -102,7 +102,8 @@ impl BindingAttributeInputs {
         let is_multi_binding = self.is_multi_binding;
 
         quote! {
-            #[::injector::derive_api::distributed_slice(::injector::derive_api::BINDING_REGISTRY)]
+            #[::injector::derive_api::linkme::distributed_slice(::injector::derive_api::BINDING_REGISTRY)]
+            #[linkme(crate = ::injector::derive_api::linkme)]
             fn #inject_meta_fn() -> ::injector::derive_api::BindingMeta {
                 ::injector::derive_api::BindingMeta {
                     trait_object: ::std::any::TypeId::of::<&'static dyn #trait_>(),
