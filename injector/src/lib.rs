@@ -3,7 +3,7 @@ pub mod derive_api;
 mod runtime;
 
 pub use injector_derive::{Injectable, binding, constructor, multi_binding};
-pub use runtime::Injector;
+pub use runtime::{InjectorBuilder, Injector};
 
 /// A type that the [`Injector`] can manage. This type should have a set of dependencies (which are
 /// also [`Injectable`]), and a way to construct the type from those dependencies. Use the

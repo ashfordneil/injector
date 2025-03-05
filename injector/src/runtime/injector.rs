@@ -22,12 +22,15 @@ impl Injector {
     /// Every type which derives [`crate::Injectable`] gets added to a global registry. This builds
     /// all of those types, and returns an Injector that can supply any of them through [`Self::get`].
     pub fn new() -> Self {
+        Self::builder().build_the_world()
+    }
+
+    pub fn builder() -> InjectorBuilder {
         InjectorBuilder::new(Injector {
             items: UnsafeStore::new(),
             index: HashMap::new(),
             multi_bindings_index: HashMap::new(),
         })
-        .build_the_world()
     }
 
     /// Fetch an item from the injector cache. This will panic if for some reason the object does
@@ -123,5 +126,10 @@ impl Injector {
         } else {
             self.index.insert(metadata.this, position);
         }
+    }
+
+    pub(super) fn store<I: InjectableStatic>(&mut self, static_item: I) {
+        let position = UnsafeStore::push(&mut self.items, Box::new(static_item));
+        self.index.insert(TypeId::of::<I>(), position);
     }
 }

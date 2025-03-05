@@ -3,15 +3,29 @@ use std::any::TypeId;
 use multimap::MultiMap;
 
 use super::Injector;
-use crate::derive_api::{BINDING_REGISTRY, INJECTION_REGISTRY, InjectMeta};
+use crate::{
+    Injectable,
+    derive_api::{BINDING_REGISTRY, INJECTION_REGISTRY, InjectMeta, InjectableStatic},
+};
 
+/// A builder for [`Injector`]. This struct lets you add values manually via [`Self::inject_value`]
+/// before running the regular constructors and storing their outputs. When you are finished adding
+/// values manually, call [`Self::build_the_world`].
 pub struct InjectorBuilder {
     injector: Injector,
 }
 
 impl InjectorBuilder {
-    pub fn new(injector: Injector) -> Self {
+    pub(crate) fn new(injector: Injector) -> Self {
         InjectorBuilder { injector }
+    }
+
+    pub fn inject_value<I>(mut self, value: I) -> Self
+    where
+        I: for<'a> Injectable<'a> + InjectableStatic,
+    {
+        self.injector.store(value);
+        self
     }
 
     pub fn build_the_world(self) -> Injector {
