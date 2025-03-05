@@ -2,7 +2,7 @@ use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{ItemImpl, Path};
 
-use crate::utils::{DependentType, Namespace};
+use crate::utils::{strip_lifetimes, DependentType, Namespace};
 
 pub struct BindingAttributeInputs {
     body_verbatim: TokenStream,
@@ -69,10 +69,14 @@ impl BindingAttributeInputs {
         let trait_ = &self.trait_;
 
         let static_concrete_type = match &self.concrete_impl {
-            DependentType::RegularType(concrete_type) => quote! {
-                unsafe {
-                    // SAFETY: See safety docs in BindingMeta::create
-                    ::std::mem::transmute::<&#concrete_type, &'static <#concrete_type as ::injector::Injectable>::Static>(concrete_type)
+            DependentType::RegularType(concrete_type) => {
+                let mut concrete_type = concrete_type.clone();
+                strip_lifetimes(&mut concrete_type.path);
+                quote! {
+                    unsafe {
+                        // SAFETY: See safety docs in BindingMeta::create
+                        ::std::mem::transmute::<&#concrete_type, &'static <#concrete_type as ::injector::Injectable>::Static>(concrete_type)
+                    }
                 }
             },
             DependentType::TraitObject(concrete_trait) => quote! {

@@ -24,7 +24,10 @@ trait WeAllSayHello {
 struct SayHelloImpl;
 
 #[derive(Injectable)]
-struct SecondSayHelloImpl;
+struct SecondSayHelloImpl<'a> {
+    #[allow(unused)]
+    say_hello: &'a SayHelloImpl,
+}
 
 #[binding]
 impl SayHello for SayHelloImpl {
@@ -44,7 +47,7 @@ impl WeAllSayHello for SayHelloImpl {
 }
 
 #[multi_binding]
-impl WeAllSayHello for SecondSayHelloImpl {
+impl<'a> WeAllSayHello for SecondSayHelloImpl<'a> {
     fn also_say_hello(&self, say_hello_into: &mut String) {
         if !say_hello_into.is_empty() {
             say_hello_into.push('\n');
